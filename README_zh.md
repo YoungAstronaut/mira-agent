@@ -96,11 +96,10 @@ docker run --rm -it \
 
 ## 模型准备
 
-如果 Hugging Face 或 Megatron checkpoint 缺失，冒烟测试脚本会直接失败。默认共享目录为 `/data/dhsun/mira-agent`；在其他服务器上使用时，请覆盖 `MIRA_SHARED_ROOT` 或 `MODEL_ROOT`。先下载固定 revision 的两个模型，再使用 slime 的 Qwen3-8B 模型定义分别进行转换：
+如果 Hugging Face 或 Megatron checkpoint 缺失，冒烟测试脚本会直接失败。默认共享目录为 `/data/dhsun/mira-agent`；在其他服务器上使用时，请覆盖 `MIRA_SHARED_ROOT` 或 `MODEL_ROOT`。先下载固定 revision 的两个模型，再运行仓库内的转换脚本。脚本默认在 GPU 0 上依次转换两套模型，已有完整 checkpoint 时会安全跳过：
 
 ```bash
 cd /path/to/mira-agent
-MIRA_AGENT_ROOT="$(pwd -P)"
 MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
 MODEL_ROOT="${MODEL_ROOT:-${MIRA_SHARED_ROOT}/models}"
 mkdir -p "${MODEL_ROOT}"
@@ -113,44 +112,10 @@ hf download Qwen/Qwen3-8B \
   --revision b968826d9c46dd6066d109eabc6255188de91218 \
   --local-dir "${MODEL_ROOT}/Qwen3-8B"
 
-docker run --rm \
-  --gpus device=0 \
-  --ipc=host --shm-size=16g \
-  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
-  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
-  -w /workspace/mira-agent \
-  -e MODEL_ROOT="${MODEL_ROOT}" \
-  --entrypoint bash \
-  slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
-  -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
-       PYTHONPATH=/root/Megatron-LM:third_party/slime python \
-         third_party/slime/tools/convert_hf_to_torch_dist.py \
-         "${MODEL_ARGS[@]}" \
-         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B-Base" \
-         --save "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist" &&
-       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
-         "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"'
-
-docker run --rm \
-  --gpus device=0 \
-  --ipc=host --shm-size=16g \
-  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
-  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
-  -w /workspace/mira-agent \
-  -e MODEL_ROOT="${MODEL_ROOT}" \
-  --entrypoint bash \
-  slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
-  -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
-       PYTHONPATH=/root/Megatron-LM:third_party/slime python \
-         third_party/slime/tools/convert_hf_to_torch_dist.py \
-         "${MODEL_ARGS[@]}" \
-         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B" \
-         --save "${MODEL_ROOT}/Qwen3-8B_torch_dist" &&
-       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
-         "${MODEL_ROOT}/Qwen3-8B_torch_dist"'
+bash scripts/convert_qwen3_8b_to_torch_dist.sh all
 ```
 
-如果集群布局不同，可通过环境变量覆盖 `MIRA_SHARED_ROOT`、`MODEL_ROOT`、`MEGATRON_ROOT`、checkpoint 路径和 GPU 设置。
+也可以用 `base` 或 `instruct` 只转换一套模型，并通过 `CONVERT_GPU` 选择单张 GPU。转换日志保存在 `logs/conversion/`。如果集群布局不同，可通过环境变量覆盖 `MIRA_SHARED_ROOT`、`MODEL_ROOT`、checkpoint 路径和 GPU 设置。
 
 ## 冒烟测试
 
@@ -162,7 +127,7 @@ PYTHON_BIN=python bash scripts/run_sft_smoke.sh
 PYTHON_BIN=python bash scripts/run_rl_smoke.sh
 ```
 
-SFT 默认在 64 条 ReTool 样本上执行一次更新，使用 Qwen3 多轮 loss mask，并将单卡 token 上限设为 16,384。完整转换数据的最大渲染长度为 15,789 tokens，其中 21 条样本超过 8,192 tokens。RL 默认执行一次 on-policy 更新：4 个 prompt × 每个 prompt 8 个样本，使用对称 PPO clipping（`0.2/0.2`）、显式 low-variance KL loss（`0.001`），每轮 rollout 执行一个 learner step。默认有意不启用 dynamic sampling、partial rollout、TIS、speculative decoding、process reward、length reward 或工具使用奖励。
+SFT 默认在 64 条 ReTool 样本上执行一次更新，使用 Qwen3 多轮 loss mask，并将单卡 token 上限设为 16,384。完整转换数据的最大渲染长度为 15,789 tokens，其中 21 条样本超过 8,192 tokens。RL 默认执行一次 on-policy 更新：4 个 prompt × 每个 prompt 8 个样本，响应上限为 8,192 tokens、总上下文上限为 16,384 tokens，使用对称 PPO clipping（`0.2/0.2`）、显式 low-variance KL loss（`0.001`），每轮 rollout 执行一个 learner step。默认有意不启用 dynamic sampling、partial rollout、TIS、speculative decoding、process reward、length reward 或工具使用奖励。
 
 RL 数据与 rollout 共用同一协议：Qwen/Hermes `<tool_call>` JSON、唯一的 `code_interpreter` 函数，以及作为终止动作的 `Answer: \boxed{...}`。模型生成 token 的 loss mask 为 1，环境 observation 的 loss mask 为 0。
 

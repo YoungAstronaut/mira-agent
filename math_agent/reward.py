@@ -24,9 +24,15 @@ def _consume_boxed(text: str) -> tuple[str, str] | None:
 
 
 def extract_final_answer(response: str) -> str | None:
-    """Accept only an exact final ``Answer: \\boxed{...}`` line."""
+    """Accept an exact final answer followed only by a known EOS token."""
 
-    lines = response.rstrip().splitlines()
+    response = response.rstrip()
+    for terminal_token in ("<|im_end|>", "<|endoftext|>"):
+        if response.endswith(terminal_token):
+            response = response[: -len(terminal_token)].rstrip()
+            break
+
+    lines = response.splitlines()
     if not lines:
         return None
     final_line = lines[-1].strip()

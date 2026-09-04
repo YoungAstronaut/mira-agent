@@ -158,7 +158,7 @@ do
 done
 ```
 
-如果这两个目录缺失，离线包仍可使用，但必须在正式机器上用一张 GPU 完成转换后才能启动 SFT/RL。
+如果这两个目录缺失，离线包仍可使用，但必须在正式机器上用一张 GPU 运行 `bash scripts/convert_qwen3_8b_to_torch_dist.sh all`，完成转换后才能启动 SFT/RL。
 
 ### 5. 生成完整性校验文件
 

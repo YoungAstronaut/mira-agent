@@ -96,11 +96,10 @@ To move the pinned Docker images, repository, models, and data to another server
 
 ## Model preparation
 
-The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. The default shared root is `/data/dhsun/mira-agent`; override `MIRA_SHARED_ROOT` or `MODEL_ROOT` when using another server. Download the two models at the pinned revisions, then convert each with slime's Qwen3-8B model definition:
+The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. The default shared root is `/data/dhsun/mira-agent`; override `MIRA_SHARED_ROOT` or `MODEL_ROOT` when using another server. Download the two models at the pinned revisions, then run the repository conversion script. It converts both models sequentially on GPU 0 by default and safely skips complete checkpoints:
 
 ```bash
 cd /path/to/mira-agent
-MIRA_AGENT_ROOT="$(pwd -P)"
 MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
 MODEL_ROOT="${MODEL_ROOT:-${MIRA_SHARED_ROOT}/models}"
 mkdir -p "${MODEL_ROOT}"
@@ -113,44 +112,10 @@ hf download Qwen/Qwen3-8B \
   --revision b968826d9c46dd6066d109eabc6255188de91218 \
   --local-dir "${MODEL_ROOT}/Qwen3-8B"
 
-docker run --rm \
-  --gpus device=0 \
-  --ipc=host --shm-size=16g \
-  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
-  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
-  -w /workspace/mira-agent \
-  -e MODEL_ROOT="${MODEL_ROOT}" \
-  --entrypoint bash \
-  slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
-  -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
-       PYTHONPATH=/root/Megatron-LM:third_party/slime python \
-         third_party/slime/tools/convert_hf_to_torch_dist.py \
-         "${MODEL_ARGS[@]}" \
-         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B-Base" \
-         --save "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist" &&
-       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
-         "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"'
-
-docker run --rm \
-  --gpus device=0 \
-  --ipc=host --shm-size=16g \
-  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
-  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
-  -w /workspace/mira-agent \
-  -e MODEL_ROOT="${MODEL_ROOT}" \
-  --entrypoint bash \
-  slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
-  -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
-       PYTHONPATH=/root/Megatron-LM:third_party/slime python \
-         third_party/slime/tools/convert_hf_to_torch_dist.py \
-         "${MODEL_ARGS[@]}" \
-         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B" \
-         --save "${MODEL_ROOT}/Qwen3-8B_torch_dist" &&
-       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
-         "${MODEL_ROOT}/Qwen3-8B_torch_dist"'
+bash scripts/convert_qwen3_8b_to_torch_dist.sh all
 ```
 
-Override `MIRA_SHARED_ROOT`, `MODEL_ROOT`, `MEGATRON_ROOT`, checkpoint paths, and GPU settings through environment variables if the cluster layout differs.
+Pass `base` or `instruct` to convert only one model, and use `CONVERT_GPU` to select a single GPU. Conversion logs are written under `logs/conversion/`. Override `MIRA_SHARED_ROOT`, `MODEL_ROOT`, checkpoint paths, and GPU settings when the cluster layout differs.
 
 ## Smoke runs
 
@@ -162,7 +127,7 @@ PYTHON_BIN=python bash scripts/run_sft_smoke.sh
 PYTHON_BIN=python bash scripts/run_rl_smoke.sh
 ```
 
-The SFT default is one update over 64 ReTool examples with Qwen3 multi-turn loss masking and a 16,384-token per-GPU ceiling. The full converted set has a maximum rendered length of 15,789 tokens; 21 examples exceed 8,192 tokens. The RL default is one on-policy update: 4 prompts × 8 samples, symmetric PPO clipping (`0.2/0.2`), an explicit low-variance KL loss (`0.001`), and one learner step per rollout. It intentionally enables none of dynamic sampling, partial rollout, TIS, speculative decoding, process reward, length reward, or tool-use bonus.
+The SFT default is one update over 64 ReTool examples with Qwen3 multi-turn loss masking and a 16,384-token per-GPU ceiling. The full converted set has a maximum rendered length of 15,789 tokens; 21 examples exceed 8,192 tokens. The RL default is one on-policy update: 4 prompts × 8 samples, an 8,192-token response budget within a 16,384-token context, symmetric PPO clipping (`0.2/0.2`), an explicit low-variance KL loss (`0.001`), and one learner step per rollout. It intentionally enables none of dynamic sampling, partial rollout, TIS, speculative decoding, process reward, length reward, or tool-use bonus.
 
 The RL data and rollout share one protocol: Qwen/Hermes `<tool_call>` JSON, exactly one `code_interpreter` function, and `Answer: \boxed{...}` as the terminal action. Model-generated tokens have loss mask 1; environment observations have loss mask 0.
 

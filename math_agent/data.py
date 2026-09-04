@@ -228,6 +228,10 @@ def _atomic_write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
                 count += 1
             handle.flush()
             os.fsync(handle.fileno())
+            # NamedTemporaryFile defaults to 0600. These generated datasets are
+            # shared artifacts, so keep them readable after a root-run container
+            # atomically replaces a file in a host checkout.
+            os.fchmod(handle.fileno(), 0o644)
         os.replace(temporary_name, path)
         temporary_name = None
     finally:

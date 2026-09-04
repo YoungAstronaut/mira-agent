@@ -28,8 +28,11 @@ def test_final_answer_requires_exact_last_line() -> None:
     response = "reasoning\nAnswer: \\boxed{42}"
     assert extract_final_answer(response) == "42"
     assert parse_model_action(response) == FinalAnswer(answer="42")
+    assert extract_final_answer(response + "<|im_end|>") == "42"
+    assert extract_final_answer(response + "\n<|endoftext|>") == "42"
     assert extract_final_answer("Answer: 42") is None
     assert extract_final_answer("Answer: \\boxed{42}\nextra") is None
+    assert extract_final_answer("Answer: \\boxed{42}extra<|im_end|>") is None
 
 
 def test_observation_tokens_are_delimited_and_sanitized() -> None:

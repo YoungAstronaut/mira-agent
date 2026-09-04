@@ -12,6 +12,7 @@ MODEL_ROOT=${MODEL_ROOT:-"${MIRA_SHARED_ROOT}/models"}
 RAW_DATA=${RAW_DATA:-"${PROJECT_ROOT}/data/raw/dapo_math_17k/data/dapo-math-17k.parquet"}
 RL_DATA=${RL_DATA:-"${PROJECT_ROOT}/data/processed/dapo_math_rl_smoke.jsonl"}
 RL_MAX_ROWS=${RL_MAX_ROWS:-64}
+NUM_ROLLOUT=${NUM_ROLLOUT:-2}
 HF_CHECKPOINT=${HF_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B"}
 MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B_torch_dist"}
 REF_CHECKPOINT=${REF_CHECKPOINT:-"${MEGATRON_CHECKPOINT}"}
@@ -83,11 +84,13 @@ ROLLOUT_ARGS=(
   --tool-key tools
   --rollout-shuffle
   --reward-key score
-  --num-rollout "${NUM_ROLLOUT:-1}"
+  # A release checkpoint resumes at rollout_id=1; the upper bound is exclusive.
+  # Therefore num_rollout=2 executes exactly one learner update.
+  --num-rollout "${NUM_ROLLOUT}"
   --rollout-batch-size "${ROLLOUT_BATCH_SIZE:-4}"
   --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT:-8}"
-  --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
-  --rollout-max-context-len "${ROLLOUT_MAX_CONTEXT_LEN:-8192}"
+  --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN:-8192}"
+  --rollout-max-context-len "${ROLLOUT_MAX_CONTEXT_LEN:-16384}"
   --rollout-temperature "${ROLLOUT_TEMPERATURE:-1.0}"
   --global-batch-size "${GLOBAL_BATCH_SIZE:-32}"
   --num-steps-per-rollout 1
@@ -113,7 +116,7 @@ PERF_ARGS=(
   --recompute-method uniform
   --recompute-num-layers 1
   --use-dynamic-batch-size
-  --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU:-8192}"
+  --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU:-16384}"
 )
 OPTIMIZER_ARGS=(
   --optimizer adam

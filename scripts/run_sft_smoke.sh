@@ -12,6 +12,7 @@ MODEL_ROOT=${MODEL_ROOT:-"${MIRA_SHARED_ROOT}/models"}
 RAW_DATA=${RAW_DATA:-"${PROJECT_ROOT}/data/raw/retool_sft/train_2000.parquet"}
 SFT_DATA=${SFT_DATA:-"${PROJECT_ROOT}/data/processed/retool_sft_smoke.jsonl"}
 SFT_MAX_ROWS=${SFT_MAX_ROWS:-64}
+NUM_ROLLOUT=${NUM_ROLLOUT:-2}
 HF_CHECKPOINT=${HF_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B-Base"}
 MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"}
 SAVE_DIR=${SAVE_DIR:-"${PROJECT_ROOT}/checkpoints/qwen3-8b-base-retool-sft-smoke"}
@@ -73,7 +74,9 @@ SFT_ARGS=(
   --input-key messages
   --tool-key tools
   --rollout-shuffle
-  --num-rollout "${NUM_ROLLOUT:-1}"
+  # A release checkpoint resumes at rollout_id=1; the upper bound is exclusive.
+  # Therefore num_rollout=2 executes exactly one learner update.
+  --num-rollout "${NUM_ROLLOUT}"
   --rollout-batch-size "${ROLLOUT_BATCH_SIZE:-8}"
   --global-batch-size "${GLOBAL_BATCH_SIZE:-8}"
   --loss-type sft_loss

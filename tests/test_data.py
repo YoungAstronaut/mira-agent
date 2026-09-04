@@ -96,6 +96,7 @@ def test_prepare_retool_rejects_duplicate_questions(tmp_path: Path) -> None:
     assert report["written"] == 1
     assert report["rejected"] == 1
     assert report["rejections"][0]["reason"] == "duplicate_question"
+    assert output.stat().st_mode & 0o777 == 0o644
 
 
 def test_prepare_dapo_drops_all_conflicting_labels(tmp_path: Path) -> None:
