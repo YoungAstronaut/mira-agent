@@ -90,6 +90,10 @@ docker run --rm -it \
 
 共享存储挂载会让模型权重在宿主机与容器内保持相同的绝对路径。只有 RL 的同级 Python 沙箱需要挂载 Docker socket 和 CLI；SFT 与 checkpoint 转换可以省略这两个挂载。冒烟测试脚本在可见 GPU 已存在计算进程时会拒绝运行，因此不会终止或复用无关的训练任务。
 
+## 离线迁移
+
+如需通过移动硬盘将固定 Docker 镜像、仓库、模型和数据迁移到另一台服务器，请参阅[移动硬盘离线迁移指南](docs/offline_migration_zh.md)。
+
 ## 模型准备
 
 如果 Hugging Face 或 Megatron checkpoint 缺失，冒烟测试脚本会直接失败。默认共享目录为 `/data/dhsun/mira-agent`；在其他服务器上使用时，请覆盖 `MIRA_SHARED_ROOT` 或 `MODEL_ROOT`。先下载固定 revision 的两个模型，再使用 slime 的 Qwen3-8B 模型定义分别进行转换：

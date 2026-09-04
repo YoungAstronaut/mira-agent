@@ -90,6 +90,10 @@ docker run --rm -it \
 
 The shared-storage mount exposes model weights at the same absolute path on the host and in the container. The Docker socket and CLI mounts are needed only for RL's sibling Python sandboxes. They can be omitted for SFT and checkpoint conversion. The smoke scripts refuse to run when visible GPUs are occupied, so this container does not terminate or reuse an unrelated training job.
 
+## Offline migration
+
+To move the pinned Docker images, repository, models, and data to another server with a portable drive, follow the [Chinese offline migration guide](docs/offline_migration_zh.md).
+
 ## Model preparation
 
 The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. The default shared root is `/data/dhsun/mira-agent`; override `MIRA_SHARED_ROOT` or `MODEL_ROOT` when using another server. Download the two models at the pinned revisions, then convert each with slime's Qwen3-8B model definition:
