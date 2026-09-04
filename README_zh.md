@@ -92,30 +92,11 @@ docker run --rm -it \
 
 ## 离线迁移
 
-如需通过移动硬盘将固定 Docker 镜像、仓库、模型和数据迁移到另一台服务器，请参阅[移动硬盘离线迁移指南](docs/offline_migration_zh.md)。
+如需通过移动硬盘将固定 Docker 镜像和数据迁移到另一台服务器，并从 Git 拉取代码，请参阅[环境与数据迁移指南](docs/offline_migration_zh.md)。
 
 ## 模型准备
 
-如果 Hugging Face 或 Megatron checkpoint 缺失，冒烟测试脚本会直接失败。默认共享目录为 `/data/dhsun/mira-agent`；在其他服务器上使用时，请覆盖 `MIRA_SHARED_ROOT` 或 `MODEL_ROOT`。先下载固定 revision 的两个模型，再运行仓库内的转换脚本。脚本默认在 GPU 0 上依次转换两套模型，已有完整 checkpoint 时会安全跳过：
-
-```bash
-cd /path/to/mira-agent
-MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
-MODEL_ROOT="${MODEL_ROOT:-${MIRA_SHARED_ROOT}/models}"
-mkdir -p "${MODEL_ROOT}"
-
-hf download Qwen/Qwen3-8B-Base \
-  --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
-  --local-dir "${MODEL_ROOT}/Qwen3-8B-Base"
-
-hf download Qwen/Qwen3-8B \
-  --revision b968826d9c46dd6066d109eabc6255188de91218 \
-  --local-dir "${MODEL_ROOT}/Qwen3-8B"
-
-bash scripts/convert_qwen3_8b_to_torch_dist.sh all
-```
-
-也可以用 `base` 或 `instruct` 只转换一套模型，并通过 `CONVERT_GPU` 选择单张 GPU。转换日志保存在 `logs/conversion/`。如果集群布局不同，可通过环境变量覆盖 `MIRA_SHARED_ROOT`、`MODEL_ROOT`、checkpoint 路径和 GPU 设置。
+模型不包含在迁移包中，应在目标服务器下载并转换。固定 revision、共享存储路径、容器化下载命令、Megatron 转换脚本及结果检查统一见[MathAgent 完整训练指南的模型准备章节](docs/math_agent_training_zh.md#3-在目标服务器下载并转换模型)。
 
 ## 冒烟测试
 
@@ -127,9 +108,24 @@ PYTHON_BIN=python bash scripts/run_sft_smoke.sh
 PYTHON_BIN=python bash scripts/run_rl_smoke.sh
 ```
 
-SFT 默认在 64 条 ReTool 样本上执行一次更新，使用 Qwen3 多轮 loss mask，并将单卡 token 上限设为 16,384。完整转换数据的最大渲染长度为 15,789 tokens，其中 21 条样本超过 8,192 tokens。RL 默认执行一次 on-policy 更新：4 个 prompt × 每个 prompt 8 个样本，响应上限为 8,192 tokens、总上下文上限为 16,384 tokens，使用对称 PPO clipping（`0.2/0.2`）、显式 low-variance KL loss（`0.001`），每轮 rollout 执行一个 learner step。默认有意不启用 dynamic sampling、partial rollout、TIS、speculative decoding、process reward、length reward 或工具使用奖励。
+SFT 冒烟测试默认在 64 条 ReTool 样本上执行一次更新，使用 Qwen3 多轮 loss mask，并将单卡 token 上限设为 16,384。完整转换数据的最大渲染长度为 15,789 tokens，其中 21 条样本超过 8,192 tokens。RL 冒烟测试默认执行一次 on-policy 更新：4 个 prompt × 每个 prompt 8 个样本，响应上限为 8,192 tokens、总上下文上限为 16,384 tokens，使用对称 PPO clipping（`0.2/0.2`）、显式 low-variance KL loss（`0.001`），每轮 rollout 执行一个 learner step。冒烟测试默认有意不启用 dynamic sampling、partial rollout、TIS、speculative decoding、process reward、length reward 或工具使用奖励。
 
 RL 数据与 rollout 共用同一协议：Qwen/Hermes `<tool_call>` JSON、唯一的 `code_interpreter` 函数，以及作为终止动作的 `Answer: \boxed{...}`。模型生成 token 的 loss mask 为 1，环境 observation 的 loss mask 为 0。
+
+## 完整训练
+
+完整 SFT 和标准 GRPO baseline 分别使用以下脚本：
+
+以下命令在上面的固定 Slime 容器内执行；此时工作目录是 `/workspace/mira-agent`，而模型与 checkpoint 共享目录通过 identity mount 保持宿主机和容器内绝对路径一致。
+
+```bash
+PYTHON_BIN=python bash scripts/run_sft_full.sh
+
+# 先完成文档规定的长度 pilot，再启动长程 RL。
+PYTHON_BIN=python ACK_RL_LENGTH_BUDGET=1 bash scripts/run_rl_grpo.sh
+```
+
+默认 SFT 使用全部 1,992 条有效 ReTool 轨迹训练 3 epoch，共 747 次更新。默认 RL 使用全部 17,243 条去重 DAPO-Math prompt，每次更新采样 64 个 prompt × 8 条 response，并执行 3,000 次标准 GRPO 更新。运行方式、恢复语义、总采样预算、长度 pilot、监控指标和参数覆盖见[MathAgent 完整训练指南](docs/math_agent_training_zh.md)。目前完整脚本已通过数据预检和命令展开检查，但完整时长训练尚未执行。
 
 ## CPU 验证
 
@@ -137,7 +133,8 @@ RL 数据与 rollout 共用同一协议：Qwen/Hermes `<tool_call>` JSON、唯�
 cd /path/to/mira-agent
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider
 python -X pycache_prefix=/tmp/mira-agent-pycache -m compileall -q math_agent tests
-bash -n scripts/run_sft_smoke.sh scripts/run_rl_smoke.sh
+bash -n scripts/run_sft_smoke.sh scripts/run_rl_smoke.sh \
+  scripts/run_sft_full.sh scripts/run_rl_grpo.sh
 
 MATH_AGENT_RUN_DOCKER_TESTS=1 \
   PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_python_tool.py

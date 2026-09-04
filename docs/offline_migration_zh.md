@@ -1,25 +1,27 @@
-# MIRA Agent 移动硬盘离线迁移指南
+# MIRA Agent 环境与数据迁移指南
 
 [返回中文 README](../README_zh.md) | [English README](../README.md)
 
-本文说明如何通过移动硬盘，把 MIRA Agent 的 Docker 运行环境、Git 仓库、Slime submodule、模型和数据迁移到正式训练服务器。目标是在正式机器不重新构建 Python/CUDA 用户态环境，并且在断网条件下也能恢复完整工程。
+本文说明如何把 MIRA Agent 的 Docker 运行环境和原始数据制作成一个可复制的离线包，并在该目录已经传到正式训练服务器后完成恢复。代码默认不放入离线包：源机器只在 manifest 中记录已经测试并 push 的 Git commit，目标服务器从 GitHub 拉取该版本。模型权重也不放入离线包；环境和数据恢复完成后，统一按照[MathAgent 完整训练指南](math_agent_training_zh.md#3-在目标服务器下载并转换模型)下载并转换模型。
 
 ## 迁移边界
 
-移动硬盘可以携带：
+离线包包含：
 
 - `mira-agent/slime-runtime:20260903-cu129`：Slime、PyTorch、SGLang、Ray 和 Megatron 运行环境；
 - `python:3.11-slim`：RL 在线 Python 工具沙箱；
-- MIRA Agent Git 历史和当前 commit；
-- Slime submodule 的 Git 历史和固定 commit；
-- Hugging Face 模型、可选的 Megatron `torch_dist` checkpoint，以及原始数据。
+- 经过测试的 MIRA Agent commit 和 Docker 镜像 ID 记录；
+- ReTool 和 DAPO-Math 原始数据。
 
-移动硬盘不能替代正式机器上的：
+默认流程中，离线包**不包含**代码、Hugging Face 模型或 Megatron `torch_dist` checkpoint。正式训练服务器必须能够访问 GitHub 和 Hugging Face（或配置等价的镜像站），当前账号还需拥有 MIRA Agent 仓库的 SSH 权限；完成模型下载后还需要一张独占 GPU 做转换。若目标机可能无法访问 GitHub，可额外生成 Git bundle 作为可选备份。
+
+离线包不能替代正式机器上的：
 
 - NVIDIA 驱动；
 - Docker Engine；
 - NVIDIA Container Toolkit；
 - 足够的本地 Docker 数据空间；
+- 下载模型所需的网络、代理或 Hugging Face 凭据；
 - 可供训练独占使用的 GPU。
 
 不要直接复制 `/var/lib/docker`，也不要使用 `docker export` 导出镜像。跨机器迁移镜像应使用 `docker save` 和 `docker load`。
@@ -33,12 +35,10 @@
 | Python 沙箱镜像 | `python:3.11-slim` |
 | Python 沙箱镜像 ID | `sha256:be1575ed968de893bd54f4c56315ff7c4736ce522c1bca08fd521731aafc0d76` |
 | Slime commit | `4c193f1f37509cca70f0e88807a9305b70f63f4e` |
-| Qwen3-8B-Base revision | `49e3418fbbbca6ecbdf9608b4d22e5a407081db4` |
-| Qwen3-8B revision | `b968826d9c46dd6066d109eabc6255188de91218` |
 
-镜像在 Docker 中展开后约占 67 GB，两套 Hugging Face 模型约占 31 GB，原始数据约占 291 MB。若同时携带两套 `torch_dist` checkpoint，建议移动硬盘至少预留 150 GB；为日志、校验文件和后续 checkpoint 留出余量时，建议准备 200 GB 以上空间。
+镜像在 Docker 中展开后约占 67 GB，原始数据约占 291 MB；离线包所在存储主要按 Docker 归档和原始数据的实际大小预留即可。可选 Git bundle 体积较小。正式服务器的共享存储还需容纳两套 Hugging Face 权重和两套转换后的 `torch_dist` checkpoint，当前合计约 64 GB；训练 checkpoint 的空间需求另见[完整训练指南](math_agent_training_zh.md#2-目标服务器基础预检)。
 
-移动硬盘推荐使用 ext4。FAT32 存在单文件 4 GB 限制，不能用于镜像归档；exFAT 可以存放大文件，但不会保留完整的 Unix 权限语义。
+如果使用移动硬盘或其他可移动介质中转，推荐使用 ext4。FAT32 存在单文件 4 GB 限制，不能用于镜像归档；exFAT 可以存放大文件，但不会保留完整的 Unix 权限语义。
 
 ## 一、在源机器制作离线包
 
@@ -50,14 +50,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-MODEL_ROOT="${MODEL_ROOT:-/data/dhsun/mira-agent/models}"
-TRANSFER_ROOT=/path/to/mounted-disk/mira-agent-offline
+TRANSFER_ROOT=/path/to/output/mira-agent-transfer
 
 mkdir -p \
   "${TRANSFER_ROOT}/images" \
-  "${TRANSFER_ROOT}/git" \
-  "${TRANSFER_ROOT}/artifacts/models" \
-  "${TRANSFER_ROOT}/artifacts/data/raw" \
+  "${TRANSFER_ROOT}/data/raw" \
   "${TRANSFER_ROOT}/manifest"
 
 git -C "${REPO_ROOT}" status --short
@@ -65,7 +62,7 @@ git -C "${REPO_ROOT}" submodule status
 df -h "${TRANSFER_ROOT}"
 ```
 
-打包前，主仓库和 Slime submodule 的工作树都应为空。Git bundle 只包含已经提交的内容，不包含未提交文件。
+打包前，主仓库和 Slime submodule 的工作树都应为空。完整训练脚本和文档必须先提交并 push；manifest 只能记录目标服务器可以从远端取得的 commit。
 
 ### 2. 导出两套 Docker 镜像
 
@@ -83,7 +80,7 @@ docker save \
   | zstd -T0 -3 -o "${TRANSFER_ROOT}/images/docker-images.tar.zst"
 ```
 
-如果目标机器没有 `zstd`，可以改为不压缩的 tar，但移动硬盘需要更多空间：
+如果目标机器没有 `zstd`，可以改为不压缩的 tar，但离线包需要更多空间：
 
 ```bash
 docker save \
@@ -94,75 +91,60 @@ docker save \
 
 只需保留 `docker-images.tar.zst` 或 `docker-images.tar` 中的一种。
 
-### 3. 打包主仓库和 Slime submodule
+### 3. 记录已经提交并 push 的代码版本
 
 ```bash
 set -euo pipefail
 
-# Git bundle 必须包含完整的提交历史。若仓库是浅克隆，先在源机器联网补全对象。
-for repository in \
-  "${REPO_ROOT}" \
-  "${REPO_ROOT}/third_party/slime"
-do
-  if test "$(git -C "${repository}" rev-parse --is-shallow-repository)" = true; then
-    git -C "${repository}" fetch --unshallow --tags origin
-  fi
-done
-
 test -z "$(git -C "${REPO_ROOT}" status --porcelain)"
 test -z "$(git -C "${REPO_ROOT}/third_party/slime" status --porcelain)"
 
-git -C "${REPO_ROOT}" bundle create \
-  "${TRANSFER_ROOT}/git/mira-agent.bundle" --all
-
-git -C "${REPO_ROOT}/third_party/slime" bundle create \
-  "${TRANSFER_ROOT}/git/slime.bundle" --all
+# 确认当前主仓库 commit 已经存在于团队远端 main。
+git -C "${REPO_ROOT}" fetch origin main
+test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = \
+  "$(git -C "${REPO_ROOT}" rev-parse origin/main)"
 
 git -C "${REPO_ROOT}" rev-parse HEAD \
   > "${TRANSFER_ROOT}/manifest/mira-agent.commit"
-git -C "${REPO_ROOT}/third_party/slime" rev-parse HEAD \
-  > "${TRANSFER_ROOT}/manifest/slime.commit"
+
+{
+  printf '%s ' 'mira-agent/slime-runtime:20260903-cu129'
+  docker image inspect mira-agent/slime-runtime:20260903-cu129 \
+    --format '{{.Id}}'
+  printf '%s ' 'python:3.11-slim'
+  docker image inspect python:3.11-slim --format '{{.Id}}'
+} > "${TRANSFER_ROOT}/manifest/image-ids.txt"
+```
+
+如果目标服务器可能无法访问 GitHub，再额外生成 Git bundle；正常联网迁移不需要这一步：
+
+```bash
+mkdir -p "${TRANSFER_ROOT}/git"
+
+git -C "${REPO_ROOT}" bundle create \
+  "${TRANSFER_ROOT}/git/mira-agent.bundle" --all
+git -C "${REPO_ROOT}/third_party/slime" bundle create \
+  "${TRANSFER_ROOT}/git/slime.bundle" --all
 
 git bundle verify "${TRANSFER_ROOT}/git/mira-agent.bundle"
 git bundle verify "${TRANSFER_ROOT}/git/slime.bundle"
 ```
 
-即使正式机器可以访问 GitHub，也建议保留这两个 bundle，避免迁移时受网络或 submodule 下载影响。
-
-### 4. 复制模型和数据
+### 4. 复制原始数据
 
 ```bash
 set -euo pipefail
 
 rsync -aH --info=progress2 \
-  "${MODEL_ROOT}/" \
-  "${TRANSFER_ROOT}/artifacts/models/"
-
-rsync -aH --info=progress2 \
   "${REPO_ROOT}/data/raw/" \
-  "${TRANSFER_ROOT}/artifacts/data/raw/"
+  "${TRANSFER_ROOT}/data/raw/"
 ```
 
-检查是否已经包含 Megatron checkpoint：
-
-```bash
-for checkpoint in \
-  Qwen3-8B-Base_torch_dist \
-  Qwen3-8B_torch_dist
-do
-  if test -d "${TRANSFER_ROOT}/artifacts/models/${checkpoint}"; then
-    printf 'OK %s\n' "${checkpoint}"
-  else
-    printf 'MISSING %s; convert on the target machine\n' "${checkpoint}"
-  fi
-done
-```
-
-如果这两个目录缺失，离线包仍可使用，但必须在正式机器上用一张 GPU 运行 `bash scripts/convert_qwen3_8b_to_torch_dist.sh all`，完成转换后才能启动 SFT/RL。
+模型目录不要复制到离线包；恢复完成后转入[完整训练指南的模型准备步骤](math_agent_training_zh.md#3-在目标服务器下载并转换模型)。
 
 ### 5. 生成完整性校验文件
 
-该步骤会顺序读取全部镜像和模型文件，耗时取决于移动硬盘速度：
+该步骤会顺序读取全部镜像、数据文件和可选 Git bundle，耗时取决于离线包所在存储的读取速度：
 
 ```bash
 set -euo pipefail
@@ -179,45 +161,63 @@ set -euo pipefail
 sync
 ```
 
-写入结束后再安全卸载移动硬盘，避免操作系统尚未刷盘。
+写入结束后先等待 `sync` 完成，再复制整个 `mira-agent-transfer/` 目录到目标服务器。
 
 离线包应具有以下结构：
 
 ```text
-mira-agent-offline/
+mira-agent-transfer/
 ├── images/
 │   └── docker-images.tar.zst
-├── git/
-│   ├── mira-agent.bundle
-│   └── slime.bundle
-├── artifacts/
-│   ├── models/
-│   └── data/raw/
+├── data/
+│   └── raw/
+│       ├── retool_sft/
+│       └── dapo_math_17k/
 └── manifest/
     ├── SHA256SUMS
     ├── mira-agent.commit
-    └── slime.commit
+    └── image-ids.txt
 ```
+
+若生成了断网备用包，顶层还会有可选的 `git/mira-agent.bundle` 和 `git/slime.bundle`。
 
 ## 二、在正式机器恢复
 
 ### 1. 检查宿主机基础能力
 
 ```bash
+set -euo pipefail
+
 nvidia-smi
 docker version
 docker info
-df -h /var/lib/docker /data 2>/dev/null || true
+
+DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}')"
+printf 'Docker data-root: %s\n' "${DOCKER_ROOT}"
+df -h "${DOCKER_ROOT}"
 ```
 
-正式机器的 NVIDIA 驱动必须支持镜像所用的 CUDA 12.9。Docker 必须已经配置 NVIDIA Container Toolkit。Docker 镜像会被加载到目标 daemon 的数据目录，通常是 `/var/lib/docker`；它们不会直接从移动硬盘运行。
+正式机器的 NVIDIA 驱动必须支持镜像所用的 CUDA 12.9。Docker 必须已经配置 NVIDIA Container Toolkit。`DOCKER_ROOT` 通常是 `/var/lib/docker`，但也可能由管理员改到其他数据盘；必须以 `docker info` 的输出为准。镜像导入后由 Docker daemon 自动写入这个目录，不要手工创建、复制或修改其中的文件。
 
-### 2. 校验移动硬盘内容
+如果当前账号执行 `docker info` 报权限错误，需要由管理员把账号加入允许访问 Docker daemon 的用户组，或在本节所有 `docker` 命令前统一加 `sudo`。
+
+### 2. 校验已经传到服务器的离线包
+
+先通过 `rsync`、`scp` 或其他文件传输方式，把完整的 `mira-agent-transfer/` 目录复制到目标服务器。`TRANSFER_ROOT` 应指向目标服务器上这个目录的实际位置，而不是 Docker 数据目录或它的上级目录：
 
 ```bash
 set -euo pipefail
 
-TRANSFER_ROOT=/path/to/mounted-disk/mira-agent-offline
+TRANSFER_ROOT=/path/on/target-server/mira-agent-transfer
+
+test -d "${TRANSFER_ROOT}"
+test -f "${TRANSFER_ROOT}/manifest/SHA256SUMS"
+test -f "${TRANSFER_ROOT}/manifest/mira-agent.commit"
+test -f "${TRANSFER_ROOT}/manifest/image-ids.txt"
+test -d "${TRANSFER_ROOT}/data/raw/retool_sft"
+test -d "${TRANSFER_ROOT}/data/raw/dapo_math_17k"
+test -f "${TRANSFER_ROOT}/images/docker-images.tar.zst" || \
+  test -f "${TRANSFER_ROOT}/images/docker-images.tar"
 
 (
   cd "${TRANSFER_ROOT}"
@@ -228,6 +228,8 @@ TRANSFER_ROOT=/path/to/mounted-disk/mira-agent-offline
 任何一项校验失败都应停止恢复，重新复制对应文件。
 
 ### 3. 加载 Docker 镜像
+
+不需要把镜像归档复制到 `/var/lib/docker` 或代码仓库。直接从目标服务器上的 `TRANSFER_ROOT` 加载即可；`docker load` 会解包并把镜像层写入上一节查到的 `DOCKER_ROOT`。
 
 Zstandard 归档：
 
@@ -244,6 +246,8 @@ zstd -dc "${TRANSFER_ROOT}/images/docker-images.tar.zst" \
 docker load -i "${TRANSFER_ROOT}/images/docker-images.tar"
 ```
 
+加载可能持续较长时间。命令成功返回后，训练不再从归档文件读取镜像；目标服务器上的归档只用于迁移和备份。
+
 确认镜像 ID：
 
 ```bash
@@ -256,43 +260,59 @@ test "$(docker image inspect \
   python:3.11-slim \
   --format '{{.Id}}')" = \
   'sha256:be1575ed968de893bd54f4c56315ff7c4736ce522c1bca08fd521731aafc0d76'
+
+docker image ls mira-agent/slime-runtime:20260903-cu129
+docker image ls python:3.11-slim
 ```
 
 ### 4. 恢复 Git 仓库和 submodule
+
+默认从 GitHub 拉取 manifest 固定的版本。这里要求目标服务器能够访问 GitHub，且当前账号已配置 MIRA Agent 仓库的 SSH 权限：
 
 ```bash
 set -euo pipefail
 
 WORK_ROOT=/path/to/workspace
 REPO_ROOT="${WORK_ROOT}/mira-agent"
+EXPECTED_COMMIT="$(cat "${TRANSFER_ROOT}/manifest/mira-agent.commit")"
 
 mkdir -p "${WORK_ROOT}"
-git clone "${TRANSFER_ROOT}/git/mira-agent.bundle" "${REPO_ROOT}"
+git clone --recurse-submodules \
+  git@github.com:YoungAstronaut/mira-agent.git \
+  "${REPO_ROOT}"
 
-# 临时让 submodule 从移动硬盘上的 bundle 初始化，完成后恢复项目记录的远端 URL。
+git -C "${REPO_ROOT}" checkout "${EXPECTED_COMMIT}"
+git -C "${REPO_ROOT}" submodule update --init --recursive
+
+test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = \
+  "${EXPECTED_COMMIT}"
+test "$(git -C "${REPO_ROOT}/third_party/slime" rev-parse HEAD)" = \
+  "$(git -C "${REPO_ROOT}" rev-parse HEAD:third_party/slime)"
+
+git -C "${REPO_ROOT}" submodule status
+```
+
+如果 GitHub 临时不可用且离线包中包含可选 bundle，才改用以下离线恢复方式：
+
+```bash
+set -euo pipefail
+
+WORK_ROOT=/path/to/workspace
+REPO_ROOT="${WORK_ROOT}/mira-agent"
+EXPECTED_COMMIT="$(cat "${TRANSFER_ROOT}/manifest/mira-agent.commit")"
+
+git clone "${TRANSFER_ROOT}/git/mira-agent.bundle" "${REPO_ROOT}"
+git -C "${REPO_ROOT}" checkout "${EXPECTED_COMMIT}"
+
 git -C "${REPO_ROOT}" submodule init
 git -C "${REPO_ROOT}" config submodule.third_party/slime.url \
   "${TRANSFER_ROOT}/git/slime.bundle"
 git -C "${REPO_ROOT}" -c protocol.file.allow=always \
   submodule update --init --checkout
 git -C "${REPO_ROOT}" submodule sync
-
-test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = \
-  "$(cat "${TRANSFER_ROOT}/manifest/mira-agent.commit")"
-test "$(git -C "${REPO_ROOT}/third_party/slime" rev-parse HEAD)" = \
-  "$(cat "${TRANSFER_ROOT}/manifest/slime.commit")"
-
-git -C "${REPO_ROOT}" submodule status
 ```
 
-如果正式机器可以连接 GitHub，可以把主仓库 origin 改回团队远端；这不是离线运行所必需的：
-
-```bash
-git -C "${REPO_ROOT}" remote set-url origin \
-  git@github.com:YoungAstronaut/mira-agent.git
-```
-
-### 5. 恢复模型和数据
+### 5. 恢复原始数据并设置共享存储
 
 选择正式机器上的共享存储目录：
 
@@ -305,11 +325,7 @@ MODEL_ROOT="${TARGET_SHARED_ROOT}/models"
 mkdir -p "${MODEL_ROOT}" "${REPO_ROOT}/data/raw"
 
 rsync -aH --info=progress2 \
-  "${TRANSFER_ROOT}/artifacts/models/" \
-  "${MODEL_ROOT}/"
-
-rsync -aH --info=progress2 \
-  "${TRANSFER_ROOT}/artifacts/data/raw/" \
+  "${TRANSFER_ROOT}/data/raw/" \
   "${REPO_ROOT}/data/raw/"
 
 export MIRA_SHARED_ROOT="${TARGET_SHARED_ROOT}"
@@ -360,18 +376,11 @@ docker run --rm \
 
 该检查应通过普通单元测试和真实的无网络 Python 沙箱测试。挂载 Docker socket 等价于向容器授予较高的宿主机权限，只应在可信的训练容器中使用。
 
-### 8. 准备 Megatron checkpoint
+### 8. 转入模型准备和训练流程
 
-确认以下目录存在：
+至此，Docker 镜像、Git 代码和原始数据已经在正式机器恢复完成。下一步统一执行[完整训练指南第 3 节](math_agent_training_zh.md#3-在目标服务器下载并转换模型)，在正式机器下载固定 revision 的 Hugging Face 模型，并用仓库脚本生成 Megatron `torch_dist` checkpoint。
 
-```bash
-test -d "${MODEL_ROOT}/Qwen3-8B-Base"
-test -d "${MODEL_ROOT}/Qwen3-8B"
-test -d "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"
-test -d "${MODEL_ROOT}/Qwen3-8B_torch_dist"
-```
-
-如果后两个目录缺失，使用[中文 README 的模型准备命令](../README_zh.md#模型准备)在正式机器上依次转换。转换脚本至少需要一张可用 GPU；不要在其他训练占用 GPU 时强制执行。
+模型下载和转换命令只在完整训练指南中维护，本文不再复制，避免两份文档的 revision、镜像名或路径约定发生漂移。模型转换需要一张独占 GPU；不要在其他训练占用 GPU 时强制执行。
 
 ## 三、训练前最终验收
 
@@ -380,13 +389,15 @@ test -d "${MODEL_ROOT}/Qwen3-8B_torch_dist"
 - `git status --short` 没有非预期修改；
 - `git submodule status` 指向固定的 Slime commit；
 - 两套 Docker 镜像 ID 与本文一致；
-- 两套 HF 模型和两套 `torch_dist` checkpoint 均存在；
+- 两套 HF 模型已在正式机器下载，两套 `torch_dist` checkpoint 已在正式机器转换完成；
 - ReTool 与 DAPO-Math 原始数据存在；
 - 8 张 GPU 可由本次任务独占；
 - 当前容器内没有需要复用或停止的 Ray 集群；
 - CPU/容器测试与 Python 沙箱测试通过。
 
 先运行一次 SFT smoke update，确认 loss、loss mask 和 checkpoint 保存正常；再运行一次 RL smoke update，确认 rollout、Python 工具调用、reward 和 learner update 正常。具体命令见[中文 README 的冒烟测试章节](../README_zh.md#冒烟测试)。
+
+smoke 验收通过后，按照[MathAgent 完整训练指南](math_agent_training_zh.md)先执行完整 SFT，再完成 RL response-length pilot。只有长度、reward 方差、梯度和 train/rollout log-prob mismatch 达到文档中的 gate 后，才启动 3,000-update GRPO baseline。
 
 当前脚本会在 GPU 已被占用或 checkpoint 缺失时拒绝启动。不要通过 `ALLOW_BUSY_GPUS=1` 绕过共享服务器上的保护检查。
 
@@ -398,8 +409,9 @@ test -d "${MODEL_ROOT}/Qwen3-8B_torch_dist"
 | 转换报 `No usable accelerator was detected` | `docker run` 是否包含 `--gpus device=0` |
 | 容器内找不到模型 | `MIRA_SHARED_ROOT` 是否挂载，`MODEL_ROOT` 是否指向容器内可见路径 |
 | RL 找不到 `docker` 或无法连接 daemon | 是否挂载 Docker CLI 和 `/var/run/docker.sock` |
-| `git submodule status` 前出现 `-` | Slime bundle 是否已经克隆到 `third_party/slime` |
-| `docker load` 空间不足 | 检查 Docker data-root 所在文件系统，而不只是移动硬盘空间 |
+| GitHub clone 报权限错误 | 当前账号的 SSH key 是否已加入 GitHub，并拥有 MIRA Agent 仓库权限 |
+| `git submodule status` 前出现 `-` | 是否执行了 `git submodule update --init --recursive`，以及目标机能否访问公开的 THUDM/slime |
+| `docker load` 空间不足 | 检查 Docker data-root 所在文件系统，而不只是离线包所在目录的空间 |
 | GPU 可见但 CUDA 初始化 OOM | GPU 是否已有计算进程；应申请独占资源后重试 |
 
-完成上述验收后，移动硬盘只用于归档和灾备即可；正式训练不应依赖移动硬盘的持续挂载。
+完成上述验收后，正式训练不再依赖 `mira-agent-transfer/`。镜像已经位于 Docker daemon 的 `DOCKER_ROOT` 中，原始数据也已经复制到仓库；服务器上的离线包目录可以继续保留作灾备，也可以在确认备份完整后另行清理。

@@ -7,7 +7,7 @@ PROJECT_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 MIRA_SHARED_ROOT=${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}
 MODEL_ROOT=${MODEL_ROOT:-"${MIRA_SHARED_ROOT}/models"}
 CONVERT_GPU=${CONVERT_GPU:-0}
-RUNTIME_IMAGE=${RUNTIME_IMAGE:-slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c}
+RUNTIME_IMAGE=${RUNTIME_IMAGE:-mira-agent/slime-runtime:20260903-cu129}
 
 usage() {
   cat <<'EOF'

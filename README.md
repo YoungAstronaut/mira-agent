@@ -92,30 +92,11 @@ The shared-storage mount exposes model weights at the same absolute path on the 
 
 ## Offline migration
 
-To move the pinned Docker images, repository, models, and data to another server with a portable drive, follow the [Chinese offline migration guide](docs/offline_migration_zh.md).
+To move the pinned Docker images and data with a portable drive, then fetch the code from Git, follow the [Chinese environment and data migration guide](docs/offline_migration_zh.md).
 
 ## Model preparation
 
-The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. The default shared root is `/data/dhsun/mira-agent`; override `MIRA_SHARED_ROOT` or `MODEL_ROOT` when using another server. Download the two models at the pinned revisions, then run the repository conversion script. It converts both models sequentially on GPU 0 by default and safely skips complete checkpoints:
-
-```bash
-cd /path/to/mira-agent
-MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
-MODEL_ROOT="${MODEL_ROOT:-${MIRA_SHARED_ROOT}/models}"
-mkdir -p "${MODEL_ROOT}"
-
-hf download Qwen/Qwen3-8B-Base \
-  --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
-  --local-dir "${MODEL_ROOT}/Qwen3-8B-Base"
-
-hf download Qwen/Qwen3-8B \
-  --revision b968826d9c46dd6066d109eabc6255188de91218 \
-  --local-dir "${MODEL_ROOT}/Qwen3-8B"
-
-bash scripts/convert_qwen3_8b_to_torch_dist.sh all
-```
-
-Pass `base` or `instruct` to convert only one model, and use `CONVERT_GPU` to select a single GPU. Conversion logs are written under `logs/conversion/`. Override `MIRA_SHARED_ROOT`, `MODEL_ROOT`, checkpoint paths, and GPU settings when the cluster layout differs.
+Models are not included in the transfer bundle; download and convert them on the target server. The pinned revisions, shared-storage paths, containerized download commands, Megatron conversion script, and result checks are maintained in the [MathAgent model-preparation section](docs/math_agent_training_zh.md#3-在目标服务器下载并转换模型).
 
 ## Smoke runs
 
@@ -127,9 +108,24 @@ PYTHON_BIN=python bash scripts/run_sft_smoke.sh
 PYTHON_BIN=python bash scripts/run_rl_smoke.sh
 ```
 
-The SFT default is one update over 64 ReTool examples with Qwen3 multi-turn loss masking and a 16,384-token per-GPU ceiling. The full converted set has a maximum rendered length of 15,789 tokens; 21 examples exceed 8,192 tokens. The RL default is one on-policy update: 4 prompts × 8 samples, an 8,192-token response budget within a 16,384-token context, symmetric PPO clipping (`0.2/0.2`), an explicit low-variance KL loss (`0.001`), and one learner step per rollout. It intentionally enables none of dynamic sampling, partial rollout, TIS, speculative decoding, process reward, length reward, or tool-use bonus.
+The SFT smoke default is one update over 64 ReTool examples with Qwen3 multi-turn loss masking and a 16,384-token per-GPU ceiling. The full converted set has a maximum rendered length of 15,789 tokens; 21 examples exceed 8,192 tokens. The RL smoke default is one on-policy update: 4 prompts × 8 samples, an 8,192-token response budget within a 16,384-token context, symmetric PPO clipping (`0.2/0.2`), an explicit low-variance KL loss (`0.001`), and one learner step per rollout. The smoke run intentionally enables none of dynamic sampling, partial rollout, TIS, speculative decoding, process reward, length reward, or tool-use bonus.
 
 The RL data and rollout share one protocol: Qwen/Hermes `<tool_call>` JSON, exactly one `code_interpreter` function, and `Answer: \boxed{...}` as the terminal action. Model-generated tokens have loss mask 1; environment observations have loss mask 0.
+
+## Full training
+
+The full SFT and plain-GRPO baseline entry points are:
+
+Run the following commands inside the pinned Slime container described above. Its working directory is `/workspace/mira-agent`; the model/checkpoint shared root uses an identity bind mount and therefore has the same absolute path on the host and in the container.
+
+```bash
+PYTHON_BIN=python bash scripts/run_sft_full.sh
+
+# Complete the documented response-length pilot before a long RL run.
+PYTHON_BIN=python ACK_RL_LENGTH_BUDGET=1 bash scripts/run_rl_grpo.sh
+```
+
+SFT defaults to all 1,992 accepted ReTool trajectories for three epochs (747 updates). RL defaults to all 17,243 deduplicated DAPO-Math prompts, 64 prompts × 8 responses per update, and 3,000 plain-GRPO updates. See the [Chinese MathAgent training guide](docs/math_agent_training_zh.md) for launch, resume, total sampling budget, length-pilot, monitoring, and override details. The full scripts have passed complete-data preflight and command expansion; the full-duration runs have not yet been executed.
 
 ## CPU verification
 
@@ -137,7 +133,8 @@ The RL data and rollout share one protocol: Qwen/Hermes `<tool_call>` JSON, exac
 cd /path/to/mira-agent
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider
 python -X pycache_prefix=/tmp/mira-agent-pycache -m compileall -q math_agent tests
-bash -n scripts/run_sft_smoke.sh scripts/run_rl_smoke.sh
+bash -n scripts/run_sft_smoke.sh scripts/run_rl_smoke.sh \
+  scripts/run_sft_full.sh scripts/run_rl_grpo.sh
 
 MATH_AGENT_RUN_DOCKER_TESTS=1 \
   PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_python_tool.py
