@@ -113,7 +113,8 @@ MIRA_AGENT_ROOT="$(pwd -P)"
 MIRA_SHARED_ROOT=/path/to/shared-storage/mira-agent
 RUNTIME_IMAGE=mira-agent/slime-runtime:20260903-cu129
 
-docker run --rm -it \
+docker run -it \
+  --name mira-agent-train \
   --gpus all \
   --ipc=host \
   --shm-size=16g \
@@ -131,6 +132,28 @@ docker run --rm -it \
   "${RUNTIME_IMAGE}" \
   bash
 ```
+
+这里不使用 `--rm`，并将容器固定命名为 `mira-agent-train`，便于退出后重新进入和保留调试现场。第一次创建容器后，不要重复执行上面的 `docker run`；后续根据容器状态使用下面的命令。
+
+如果当前没有训练任务，输入 `exit` 或按 `Ctrl-D` 会退出 Bash 并停止容器。之后可以在宿主机重新启动并进入同一个容器：
+
+```bash
+docker start -ai mira-agent-train
+```
+
+如果训练正在前台运行，不要输入 `exit` 或按 `Ctrl-C`。依次按 `Ctrl-P`、`Ctrl-Q` 可以在不停止容器和训练进程的情况下脱离当前终端。之后可用下面的命令重新连接原终端：
+
+```bash
+docker attach mira-agent-train
+```
+
+也可以从另一个宿主机终端打开新的容器 shell；这种方式不会干扰原终端中正在运行的训练：
+
+```bash
+docker exec -it mira-agent-train bash
+```
+
+从这个额外 shell 执行 `exit` 只会关闭该 shell，不会停止容器的主进程。无论是否保留容器，训练日志和 checkpoint 都必须写入上面已经挂载的宿主机目录。
 
 进入容器后的路径映射如下：
 
