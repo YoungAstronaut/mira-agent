@@ -1,5 +1,7 @@
 # MIRA Agent
 
+[English](README.md) | [简体中文](README_zh.md)
+
 This repository is a monorepo for reproducible training of tool-using math, search, and code agents with slime. The first implemented vertical is MathAgent, whose initial gates are deliberately separated:
 
 1. SFT smoke test: `Qwen/Qwen3-8B-Base` on converted ReTool trajectories.
@@ -17,7 +19,7 @@ The two smoke tests do **not** yet form one training chain. This keeps failures 
 - Qwen3-8B: revision `b968826d9c46dd6066d109eabc6255188de91218`
 - slime CUDA 12 runtime: `slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c`
 
-The raw datasets are already present under `data/raw/`; generated JSONL files, model weights, checkpoints, and logs are ignored by Git.
+The raw datasets are already present under `data/raw/`. Model weights live in shared storage under `${MODEL_ROOT}` (default: `/data/dhsun/mira-agent/models`); generated JSONL files, local model links, checkpoints, and logs are ignored by Git.
 
 ## Data contracts
 
@@ -65,6 +67,7 @@ Start an interactive environment with all GPUs visible:
 ```bash
 cd /path/to/mira-agent
 MIRA_AGENT_ROOT="$(pwd -P)"
+MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
 
 docker run --rm -it \
   --gpus all \
@@ -73,65 +76,77 @@ docker run --rm -it \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
+  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
   -v /usr/bin/docker:/usr/local/bin/docker:ro \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -w /workspace/mira-agent \
   -e SLIME_ROOT=/workspace/mira-agent/third_party/slime \
   -e MEGATRON_ROOT=/root/Megatron-LM \
+  -e MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT}" \
+  -e MODEL_ROOT="${MIRA_SHARED_ROOT}/models" \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   bash
 ```
 
-The Docker socket and CLI mounts are needed only for RL's sibling Python sandboxes. They can be omitted for SFT and checkpoint conversion. The smoke scripts refuse to run when visible GPUs are occupied, so this container does not terminate or reuse an unrelated training job.
+The shared-storage mount exposes model weights at the same absolute path on the host and in the container. The Docker socket and CLI mounts are needed only for RL's sibling Python sandboxes. They can be omitted for SFT and checkpoint conversion. The smoke scripts refuse to run when visible GPUs are occupied, so this container does not terminate or reuse an unrelated training job.
 
 ## Model preparation
 
-The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. Download the two models at the pinned revisions, then convert each with slime's Qwen3-8B model definition:
+The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. The default shared root is `/data/dhsun/mira-agent`; override `MIRA_SHARED_ROOT` or `MODEL_ROOT` when using another server. Download the two models at the pinned revisions, then convert each with slime's Qwen3-8B model definition:
 
 ```bash
 cd /path/to/mira-agent
 MIRA_AGENT_ROOT="$(pwd -P)"
+MIRA_SHARED_ROOT="${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}"
+MODEL_ROOT="${MODEL_ROOT:-${MIRA_SHARED_ROOT}/models}"
+mkdir -p "${MODEL_ROOT}"
 
 hf download Qwen/Qwen3-8B-Base \
   --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
-  --local-dir "${MIRA_AGENT_ROOT}/models/Qwen3-8B-Base"
+  --local-dir "${MODEL_ROOT}/Qwen3-8B-Base"
 
 hf download Qwen/Qwen3-8B \
   --revision b968826d9c46dd6066d109eabc6255188de91218 \
-  --local-dir "${MIRA_AGENT_ROOT}/models/Qwen3-8B"
+  --local-dir "${MODEL_ROOT}/Qwen3-8B"
 
 docker run --rm \
   --gpus device=0 \
   --ipc=host --shm-size=16g \
   -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
+  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
   -w /workspace/mira-agent \
+  -e MODEL_ROOT="${MODEL_ROOT}" \
   --entrypoint bash \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
        PYTHONPATH=/root/Megatron-LM:third_party/slime python \
          third_party/slime/tools/convert_hf_to_torch_dist.py \
          "${MODEL_ARGS[@]}" \
-         --hf-checkpoint models/Qwen3-8B-Base \
-         --save models/Qwen3-8B-Base_torch_dist &&
-       chown -R "$(stat -c %u .):$(stat -c %g .)" models/Qwen3-8B-Base_torch_dist'
+         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B-Base" \
+         --save "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist" &&
+       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
+         "${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"'
 
 docker run --rm \
   --gpus device=0 \
   --ipc=host --shm-size=16g \
   -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
+  -v "${MIRA_SHARED_ROOT}:${MIRA_SHARED_ROOT}" \
   -w /workspace/mira-agent \
+  -e MODEL_ROOT="${MODEL_ROOT}" \
   --entrypoint bash \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
        PYTHONPATH=/root/Megatron-LM:third_party/slime python \
          third_party/slime/tools/convert_hf_to_torch_dist.py \
          "${MODEL_ARGS[@]}" \
-         --hf-checkpoint models/Qwen3-8B \
-         --save models/Qwen3-8B_torch_dist &&
-       chown -R "$(stat -c %u .):$(stat -c %g .)" models/Qwen3-8B_torch_dist'
+         --hf-checkpoint "${MODEL_ROOT}/Qwen3-8B" \
+         --save "${MODEL_ROOT}/Qwen3-8B_torch_dist" &&
+       chown -R "$(stat -c %u "${MODEL_ROOT}"):$(stat -c %g "${MODEL_ROOT}")" \
+         "${MODEL_ROOT}/Qwen3-8B_torch_dist"'
 ```
 
-Override `MEGATRON_ROOT`, checkpoint paths, and GPU settings through environment variables if the cluster layout differs.
+Override `MIRA_SHARED_ROOT`, `MODEL_ROOT`, `MEGATRON_ROOT`, checkpoint paths, and GPU settings through environment variables if the cluster layout differs.
 
 ## Smoke runs
 

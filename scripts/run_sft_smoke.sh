@@ -6,12 +6,14 @@ PROJECT_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 SLIME_ROOT=${SLIME_ROOT:-"${PROJECT_ROOT}/third_party/slime"}
 MEGATRON_ROOT=${MEGATRON_ROOT:-/root/Megatron-LM}
 PYTHON_BIN=${PYTHON_BIN:-python3}
+MIRA_SHARED_ROOT=${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}
+MODEL_ROOT=${MODEL_ROOT:-"${MIRA_SHARED_ROOT}/models"}
 
 RAW_DATA=${RAW_DATA:-"${PROJECT_ROOT}/data/raw/retool_sft/train_2000.parquet"}
 SFT_DATA=${SFT_DATA:-"${PROJECT_ROOT}/data/processed/retool_sft_smoke.jsonl"}
 SFT_MAX_ROWS=${SFT_MAX_ROWS:-64}
-HF_CHECKPOINT=${HF_CHECKPOINT:-"${PROJECT_ROOT}/models/Qwen3-8B-Base"}
-MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${PROJECT_ROOT}/models/Qwen3-8B-Base_torch_dist"}
+HF_CHECKPOINT=${HF_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B-Base"}
+MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B-Base_torch_dist"}
 SAVE_DIR=${SAVE_DIR:-"${PROJECT_ROOT}/checkpoints/qwen3-8b-base-retool-sft-smoke"}
 NUM_GPUS=${NUM_GPUS:-8}
 MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}

@@ -6,12 +6,14 @@ PROJECT_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 SLIME_ROOT=${SLIME_ROOT:-"${PROJECT_ROOT}/third_party/slime"}
 MEGATRON_ROOT=${MEGATRON_ROOT:-/root/Megatron-LM}
 PYTHON_BIN=${PYTHON_BIN:-python3}
+MIRA_SHARED_ROOT=${MIRA_SHARED_ROOT:-/data/dhsun/mira-agent}
+MODEL_ROOT=${MODEL_ROOT:-"${MIRA_SHARED_ROOT}/models"}
 
 RAW_DATA=${RAW_DATA:-"${PROJECT_ROOT}/data/raw/dapo_math_17k/data/dapo-math-17k.parquet"}
 RL_DATA=${RL_DATA:-"${PROJECT_ROOT}/data/processed/dapo_math_rl_smoke.jsonl"}
 RL_MAX_ROWS=${RL_MAX_ROWS:-64}
-HF_CHECKPOINT=${HF_CHECKPOINT:-"${PROJECT_ROOT}/models/Qwen3-8B"}
-MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${PROJECT_ROOT}/models/Qwen3-8B_torch_dist"}
+HF_CHECKPOINT=${HF_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B"}
+MEGATRON_CHECKPOINT=${MEGATRON_CHECKPOINT:-"${MODEL_ROOT}/Qwen3-8B_torch_dist"}
 REF_CHECKPOINT=${REF_CHECKPOINT:-"${MEGATRON_CHECKPOINT}"}
 SAVE_DIR=${SAVE_DIR:-"${PROJECT_ROOT}/checkpoints/qwen3-8b-dapo-grpo-smoke"}
 NUM_GPUS=${NUM_GPUS:-8}
