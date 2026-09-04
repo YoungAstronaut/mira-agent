@@ -32,7 +32,7 @@ DAPO conversion scans all 1,791,700 physical rows, deduplicates by extracted que
 Generate data directly when needed:
 
 ```bash
-cd /home/yhjiang/mira-agent
+cd /path/to/mira-agent
 python -m math_agent.data retool \
   --input data/raw/retool_sft/train_2000.parquet \
   --output data/processed/retool_sft.jsonl
@@ -63,17 +63,20 @@ The configured runtime is the pinned slime CUDA 12 image above. It contains Pyth
 Start an interactive environment with all GPUs visible:
 
 ```bash
+cd /path/to/mira-agent
+MIRA_AGENT_ROOT="$(pwd -P)"
+
 docker run --rm -it \
   --gpus all \
   --ipc=host \
   --shm-size=16g \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
-  -v /home/yhjiang/mira-agent:/home/yhjiang/mira-agent \
+  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
   -v /usr/bin/docker:/usr/local/bin/docker:ro \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -w /home/yhjiang/mira-agent \
-  -e SLIME_ROOT=/home/yhjiang/mira-agent/third_party/slime \
+  -w /workspace/mira-agent \
+  -e SLIME_ROOT=/workspace/mira-agent/third_party/slime \
   -e MEGATRON_ROOT=/root/Megatron-LM \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   bash
@@ -86,19 +89,22 @@ The Docker socket and CLI mounts are needed only for RL's sibling Python sandbox
 The smoke scripts fail closed if Hugging Face or Megatron checkpoints are missing. Download the two models at the pinned revisions, then convert each with slime's Qwen3-8B model definition:
 
 ```bash
+cd /path/to/mira-agent
+MIRA_AGENT_ROOT="$(pwd -P)"
+
 hf download Qwen/Qwen3-8B-Base \
   --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
-  --local-dir /home/yhjiang/mira-agent/models/Qwen3-8B-Base
+  --local-dir "${MIRA_AGENT_ROOT}/models/Qwen3-8B-Base"
 
 hf download Qwen/Qwen3-8B \
   --revision b968826d9c46dd6066d109eabc6255188de91218 \
-  --local-dir /home/yhjiang/mira-agent/models/Qwen3-8B
+  --local-dir "${MIRA_AGENT_ROOT}/models/Qwen3-8B"
 
 docker run --rm \
   --gpus device=0 \
   --ipc=host --shm-size=16g \
-  -v /home/yhjiang/mira-agent:/home/yhjiang/mira-agent \
-  -w /home/yhjiang/mira-agent \
+  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
+  -w /workspace/mira-agent \
   --entrypoint bash \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
@@ -112,8 +118,8 @@ docker run --rm \
 docker run --rm \
   --gpus device=0 \
   --ipc=host --shm-size=16g \
-  -v /home/yhjiang/mira-agent:/home/yhjiang/mira-agent \
-  -w /home/yhjiang/mira-agent \
+  -v "${MIRA_AGENT_ROOT}:/workspace/mira-agent" \
+  -w /workspace/mira-agent \
   --entrypoint bash \
   slimerl/slime@sha256:39be6cbb00f9b6770e664ace0c7b9f5ecff2977a1a205e7926a720f906fbc62c \
   -lc 'source third_party/slime/scripts/models/qwen3-8B.sh &&
@@ -132,7 +138,7 @@ Override `MEGATRON_ROOT`, checkpoint paths, and GPU settings through environment
 Run these inside a slime-compatible environment with eight exclusively allocated GPUs. Each script refuses to stop/reuse an existing Ray cluster or run on GPUs that already expose compute processes.
 
 ```bash
-cd /home/yhjiang/mira-agent
+cd /path/to/mira-agent
 PYTHON_BIN=python bash scripts/run_sft_smoke.sh
 PYTHON_BIN=python bash scripts/run_rl_smoke.sh
 ```
@@ -144,7 +150,7 @@ The RL data and rollout share one protocol: Qwen/Hermes `<tool_call>` JSON, exac
 ## CPU verification
 
 ```bash
-cd /home/yhjiang/mira-agent
+cd /path/to/mira-agent
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider
 python -X pycache_prefix=/tmp/mira-agent-pycache -m compileall -q math_agent tests
 bash -n scripts/run_sft_smoke.sh scripts/run_rl_smoke.sh
